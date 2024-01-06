@@ -6,11 +6,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <VulkanBinPath>C:\VulkanSDK\1.3.268.0\Bin</VulkanBinPath>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Silk.NET.Input" Version="2.20.0" />
     <PackageReference Include="Silk.NET.Vulkan" Version="2.20.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.20.0" />
     <PackageReference Include="Silk.NET.Windowing" Version="2.20.0" />
   </ItemGroup>
 
