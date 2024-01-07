@@ -1,18 +1,30 @@
 ﻿using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
 using Silk.NET.SDL;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
+using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
+
+struct QueueFamilyIndices
+{
+    public uint? GraphicsFamily { get; set; }
+    public uint? PresentFamily { get; set; }
+    public bool IsComplete()
+    {
+        return GraphicsFamily.HasValue && PresentFamily.HasValue;
+    }
+}
 
 namespace ShapesDisplay
 {
     unsafe class App
     {
-        private static IWindow? _window;
-        private static Vk? vk;
+        private IWindow? _window;
+        private Vk? vk;
 
         private Instance instance;
 
@@ -20,6 +32,10 @@ namespace ShapesDisplay
         private Device logicalDevice;
 
         Queue graphicsQueue;
+        Queue presentQueue;
+
+        private SurfaceKHR surface;
+        private KhrSurface? khrSurface;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
@@ -31,12 +47,6 @@ namespace ShapesDisplay
         #else
         private readonly bool enableValidationLayers = false;
         #endif
-
-        struct QueueFamilyIndices
-        {
-            public uint? GraphicsFamily { get; set; }
-            public bool IsComplete() { return GraphicsFamily.HasValue; }
-        }
 
         public void Run()
         {
@@ -64,6 +74,7 @@ namespace ShapesDisplay
         {
             CreateVulkanInstance();
             // SetupDebugMessenger();
+            CreateSurface();
             PickPhysicalDevice();
             CreateLogicalDevice();
         }
@@ -75,13 +86,16 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
+            vk?.DestroyDevice(logicalDevice, null);
+
             if (enableValidationLayers)
             {
                 debugUtils?.DestroyDebugUtilsMessenger(instance, debugMessenger, null);
             }
 
+            khrSurface!.DestroySurface(instance, surface, null);
             vk?.DestroyInstance(instance, null);
-            vk?.DestroyDevice(logicalDevice, null);
+            
             vk?.Dispose();
             _window?.Dispose();
         }
@@ -102,7 +116,7 @@ namespace ShapesDisplay
                 ApplicationVersion = new Version32(1, 0, 0),
                 PEngineName = (byte*)Marshal.StringToHGlobalAnsi("No Engine"),
                 EngineVersion = new Version32(1, 0, 0),
-                ApiVersion = Vk.Version11,
+                ApiVersion = Vk.Version12,
             };
 
             InstanceCreateInfo createInfo = new InstanceCreateInfo()
@@ -112,13 +126,12 @@ namespace ShapesDisplay
             };
 
             var extensions = GetRequiredExtensions();
-
             createInfo.EnabledExtensionCount = (uint)extensions.Length;
             createInfo.PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(extensions);
 
             if (enableValidationLayers)
             {
-                createInfo.EnabledExtensionCount = (uint)validationLayers.Length;
+                createInfo.EnabledLayerCount = (uint)validationLayers.Length;
                 createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(validationLayers);
 
                 DebugUtilsMessengerCreateInfoEXT debugCreateInfo = new();
@@ -216,6 +229,19 @@ namespace ShapesDisplay
         }
         #endregion
 
+        #region Surface
+        private void CreateSurface()
+        {
+            if (!vk!.TryGetInstanceExtension<KhrSurface>(instance, out khrSurface))
+            {
+                throw new NotSupportedException("Khr surface extension not found");
+            }
+
+            surface = _window!.VkSurface!.Create<AllocationCallbacks>(instance.ToHandle(), null).ToSurface();
+        }
+
+        #endregion
+
         #region Physical Device
         private void PickPhysicalDevice()
         {
@@ -274,6 +300,13 @@ namespace ShapesDisplay
                     indices.GraphicsFamily = i;
                 }
 
+                khrSurface!.GetPhysicalDeviceSurfaceSupport(device, i, surface, out var presentSupport);
+
+                if (presentSupport)
+                {
+                    indices.PresentFamily = i;
+                }
+
                 if (indices.IsComplete()) break;
 
                 i++;
@@ -289,23 +322,38 @@ namespace ShapesDisplay
         {
             var indices = FindQueueFamilies(physicalDevice);
 
-            DeviceQueueCreateInfo queueCreateInfo = new()
-            {
-                SType = StructureType.DeviceQueueCreateInfo,
-                QueueFamilyIndex = indices.GraphicsFamily!.Value,
-                QueueCount = 1,
-            };
+            var uniqueQueueFamilies = new[] { indices.GraphicsFamily!.Value, indices.PresentFamily!.Value };
+            uniqueQueueFamilies = uniqueQueueFamilies.Distinct().ToArray();
+
+            using var mem = GlobalMemory.Allocate(uniqueQueueFamilies.Length * sizeof(DeviceQueueCreateInfo));
+            var queueCreateInfos = (DeviceQueueCreateInfo*)Unsafe.AsPointer(ref mem.GetPinnableReference()); 
+            
+            //DeviceQueueCreateInfo queueCreateInfo = new()
+            //{
+            //    SType = StructureType.DeviceQueueCreateInfo,
+            //    QueueFamilyIndex = indices.GraphicsFamily!.Value,
+            //    QueueCount = 1,
+            //};
 
             float queuePriority = 1.0f;
-            queueCreateInfo.PQueuePriorities = &queuePriority;
+            for (int i = 0; i < uniqueQueueFamilies.Length; i++)
+            {
+                queueCreateInfos[i] = new()
+                {
+                    SType = StructureType.DeviceQueueCreateInfo,
+                    QueueFamilyIndex = uniqueQueueFamilies[i],
+                    QueueCount = 1,
+                    PQueuePriorities = &queuePriority,
+                };
+            }
 
             PhysicalDeviceFeatures deviceFeatures = new();
 
             DeviceCreateInfo deviceCreateInfo = new()
             {
                 SType = StructureType.DeviceCreateInfo,
-                PQueueCreateInfos = &queueCreateInfo,
-                QueueCreateInfoCount = 1,
+                PQueueCreateInfos = queueCreateInfos,
+                QueueCreateInfoCount = (uint)uniqueQueueFamilies.Length,
                 PEnabledFeatures = &deviceFeatures,
                 EnabledExtensionCount = 0,
             };
@@ -325,6 +373,7 @@ namespace ShapesDisplay
             }
 
             vk!.GetDeviceQueue(logicalDevice, indices.GraphicsFamily.Value, 0, out graphicsQueue);
+            vk!.GetDeviceQueue(logicalDevice, indices.PresentFamily.Value, 0, out presentQueue);
 
             if (enableValidationLayers)
             {
