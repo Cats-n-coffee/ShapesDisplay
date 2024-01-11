@@ -1,5 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.IO;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
@@ -8,6 +9,7 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
+using System.Diagnostics;
 
 struct QueueFamilyIndices
 {
@@ -95,6 +97,7 @@ namespace ShapesDisplay
             PickPhysicalDevice();
             CreateLogicalDevice();
             CreateSwapChain();
+            CreateGraphicsPipeline();
         }
 
         private void MainLoop()
@@ -585,6 +588,67 @@ namespace ShapesDisplay
 
                 return actualExtent;
             }
+        }
+
+        #endregion
+
+        #region Graphics Pipeline
+        private void CreateGraphicsPipeline()
+        {
+            var projectDir = Directory.GetParent(Directory.GetCurrentDirectory()).Parent.Parent.ToString();
+
+            var vertShaderCode = File.ReadAllBytes(Path.Combine(projectDir, "Shaders\\vert.spv"));
+            var fragShaderCode = File.ReadAllBytes(Path.Combine(projectDir, "Shaders\\frag.spv"));
+
+            ShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
+            ShaderModule fragShaderModule = CreateShaderModule(fragShaderCode);
+
+            PipelineShaderStageCreateInfo vertShaderStageInfo = new()
+            {
+                SType = StructureType.PipelineShaderStageCreateInfo,
+                Stage = ShaderStageFlags.VertexBit,
+                Module = vertShaderModule,
+                PName = (byte*)SilkMarshal.StringToPtr("main"),
+            };
+
+            PipelineShaderStageCreateInfo fragShaderStageInfo = new()
+            {
+                SType = StructureType.PipelineShaderStageCreateInfo,
+                Stage = ShaderStageFlags.FragmentBit,
+                Module = fragShaderModule,
+                PName = (byte*)SilkMarshal.StringToPtr("main"),
+            };
+
+            var shaderStages = stackalloc[]{ vertShaderStageInfo, fragShaderStageInfo };
+
+            vk!.DestroyShaderModule(logicalDevice, vertShaderModule, null);
+            vk!.DestroyShaderModule(logicalDevice, fragShaderModule, null);
+
+            SilkMarshal.Free((nint)vertShaderStageInfo.PName);
+            SilkMarshal.Free((nint)fragShaderStageInfo.PName);
+        }
+
+        private ShaderModule CreateShaderModule(byte[] code)
+        {
+            ShaderModuleCreateInfo shaderCreateInfo = new()
+            {
+                SType = StructureType.ShaderModuleCreateInfo,
+                CodeSize = (nuint)code.Length,
+            };
+
+            ShaderModule shaderModule;
+
+            fixed (byte* codePtr = code)
+            {
+                shaderCreateInfo.PCode = (uint*)codePtr;
+
+                if (vk!.CreateShaderModule(logicalDevice, shaderCreateInfo, null, out shaderModule) != Result.Success)
+                {
+                    throw new Exception("Failed to create shader module");
+                }
+            }
+
+            return shaderModule;
         }
 
         #endregion
