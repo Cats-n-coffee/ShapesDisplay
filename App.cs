@@ -55,6 +55,8 @@ namespace ShapesDisplay
         private Format swapChainImageFormat;
         Extent2D swapChainExtent;
 
+        PipelineLayout pipelineLayout;
+
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
 
@@ -108,6 +110,7 @@ namespace ShapesDisplay
         private void CleanUp()
         {
             khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
+            vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
             vk?.DestroyDevice(logicalDevice, null);
 
             if (enableValidationLayers)
@@ -620,6 +623,93 @@ namespace ShapesDisplay
             };
 
             var shaderStages = stackalloc[]{ vertShaderStageInfo, fragShaderStageInfo };
+
+            PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new()
+            {
+                SType = StructureType.PipelineVertexInputStateCreateInfo,
+                VertexBindingDescriptionCount = 0,
+                PVertexBindingDescriptions = null,
+                VertexAttributeDescriptionCount = 0,
+                PVertexAttributeDescriptions = null,
+            };
+
+            PipelineInputAssemblyStateCreateInfo assemblyStateCreateInfo = new()
+            {
+                SType = StructureType.PipelineInputAssemblyStateCreateInfo,
+                Topology = PrimitiveTopology.TriangleList,
+                PrimitiveRestartEnable = false,
+            };
+
+            Viewport viewport = new()
+            {
+                X = 0.0f, Y = 0.0f,
+                Width = swapChainExtent.Width,
+                Height = swapChainExtent.Height,
+                MinDepth = 0.0f,
+                MaxDepth = 1.0f,
+            };
+
+            Rect2D scissor = new()
+            {
+                Offset = { X = 0, Y = 0 },
+                Extent = swapChainExtent,
+            };
+
+            PipelineViewportStateCreateInfo viewportCreateInfo = new()
+            {
+                SType = StructureType.PipelineViewportStateCreateInfo,
+                ViewportCount = 1,
+                PViewports = &viewport,
+                ScissorCount = 1,
+                PScissors = &scissor,
+            };
+
+            PipelineRasterizationStateCreateInfo rasterizerCreateInfo = new()
+            {
+                SType = StructureType.PipelineRasterizationStateCreateInfo,
+                DepthClampEnable = false,
+                RasterizerDiscardEnable = false,
+                PolygonMode = PolygonMode.Fill,
+                LineWidth = 1.0f,
+                CullMode = CullModeFlags.BackBit,
+                FrontFace = FrontFace.Clockwise,
+                DepthBiasEnable = false,
+                DepthBiasConstantFactor = 0.0f,
+                DepthBiasClamp = 0.0f,
+                DepthBiasSlopeFactor = 0.0f,
+            };
+
+            PipelineMultisampleStateCreateInfo multisampleCreateInfo = new()
+            {
+                SType = StructureType.PipelineMultisampleStateCreateInfo,
+                SampleShadingEnable = false,
+                RasterizationSamples = SampleCountFlags.Count1Bit,
+            };
+
+            PipelineColorBlendAttachmentState colorBlendAttachement = new()
+            {
+                ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit |
+                    ColorComponentFlags.BBit | ColorComponentFlags.ABit,
+                BlendEnable = false,
+            };
+
+            PipelineColorBlendStateCreateInfo colorBlendingCreateInfo = new()
+            {
+                SType = StructureType.PipelineColorBlendStateCreateInfo,
+                LogicOpEnable = false,
+                AttachmentCount = 1,
+                PAttachments = &colorBlendAttachement,
+            };
+
+            PipelineLayoutCreateInfo pipelineCreateInfo = new()
+            {
+                SType = StructureType.PipelineLayoutCreateInfo,
+            };
+
+            if (vk!.CreatePipelineLayout(logicalDevice, pipelineCreateInfo, null, out pipelineLayout) != Result.Success)
+            {
+                throw new Exception("Failed to create pipeline layout");
+            }
 
             vk!.DestroyShaderModule(logicalDevice, vertShaderModule, null);
             vk!.DestroyShaderModule(logicalDevice, fragShaderModule, null);
