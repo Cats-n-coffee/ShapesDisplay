@@ -55,6 +55,7 @@ namespace ShapesDisplay
         private Format swapChainImageFormat;
         Extent2D swapChainExtent;
 
+        RenderPass renderPass;
         PipelineLayout pipelineLayout;
 
         private ExtDebugUtils? debugUtils;
@@ -99,6 +100,7 @@ namespace ShapesDisplay
             PickPhysicalDevice();
             CreateLogicalDevice();
             CreateSwapChain();
+            CreateRenderPass();
             CreateGraphicsPipeline();
         }
 
@@ -111,6 +113,7 @@ namespace ShapesDisplay
         {
             khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
             vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
+            vk?.DestroyRenderPass(logicalDevice, renderPass, null);
             vk?.DestroyDevice(logicalDevice, null);
 
             if (enableValidationLayers)
@@ -590,6 +593,51 @@ namespace ShapesDisplay
                     actualExtent.Height, capabilities.MinImageExtent.Height, capabilities.MaxImageExtent.Height);
 
                 return actualExtent;
+            }
+        }
+
+        #endregion
+
+        #region Render Pass
+        private void CreateRenderPass()
+        {
+            AttachmentDescription colorAttachment = new()
+            {
+                Format = swapChainImageFormat,
+                Samples = SampleCountFlags.Count1Bit,
+                LoadOp = AttachmentLoadOp.Clear,
+                StoreOp = AttachmentStoreOp.Store,
+                StencilLoadOp = AttachmentLoadOp.DontCare,
+                StencilStoreOp = AttachmentStoreOp.DontCare,
+                InitialLayout = ImageLayout.Undefined,
+                FinalLayout = ImageLayout.PresentSrcKhr,
+            };
+
+            AttachmentReference colorAttachmentRef = new()
+            {
+                Attachment = 0,
+                Layout = ImageLayout.ColorAttachmentOptimal,
+            };
+
+            SubpassDescription subpass = new()
+            {
+                PipelineBindPoint = PipelineBindPoint.Graphics,
+                ColorAttachmentCount = 1,
+                PColorAttachments = &colorAttachmentRef,
+            };
+
+            RenderPassCreateInfo renderPassCreateInfo = new()
+            {
+                SType = StructureType.RenderPassCreateInfo,
+                AttachmentCount = 1,
+                PAttachments = &colorAttachment,
+                SubpassCount = 1,
+                PSubpasses = &subpass,
+            };
+
+            if (vk!.CreateRenderPass(logicalDevice, renderPassCreateInfo, null, out renderPass) != Result.Success)
+            {
+                throw new Exception("Failed to create render pass");
             }
         }
 
