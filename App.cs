@@ -58,6 +58,8 @@ namespace ShapesDisplay
         RenderPass renderPass;
         PipelineLayout pipelineLayout;
 
+        Pipeline graphicsPipeline;
+
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
 
@@ -112,8 +114,11 @@ namespace ShapesDisplay
         private void CleanUp()
         {
             khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
+
+            vk?.DestroyPipeline(logicalDevice, graphicsPipeline, null);
             vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
             vk?.DestroyRenderPass(logicalDevice, renderPass, null);
+
             vk?.DestroyDevice(logicalDevice, null);
 
             if (enableValidationLayers)
@@ -749,14 +754,36 @@ namespace ShapesDisplay
                 PAttachments = &colorBlendAttachement,
             };
 
-            PipelineLayoutCreateInfo pipelineCreateInfo = new()
+            PipelineLayoutCreateInfo pipelineLayoutCreateInfo = new()
             {
                 SType = StructureType.PipelineLayoutCreateInfo,
             };
 
-            if (vk!.CreatePipelineLayout(logicalDevice, pipelineCreateInfo, null, out pipelineLayout) != Result.Success)
+            if (vk!.CreatePipelineLayout(logicalDevice, pipelineLayoutCreateInfo, null, out pipelineLayout) != Result.Success)
             {
                 throw new Exception("Failed to create pipeline layout");
+            }
+
+            GraphicsPipelineCreateInfo pipelineCreateInfo = new()
+            {
+                SType = StructureType.GraphicsPipelineCreateInfo,
+                StageCount = 2,
+                PStages = shaderStages,
+                PVertexInputState = &vertexInputStateCreateInfo,
+                PInputAssemblyState = &assemblyStateCreateInfo,
+                PViewportState = &viewportCreateInfo,
+                PRasterizationState = &rasterizerCreateInfo,
+                PMultisampleState = &multisampleCreateInfo,
+                PDepthStencilState = null,
+                PColorBlendState = &colorBlendingCreateInfo,
+                Layout = pipelineLayout,
+                RenderPass = renderPass,
+                Subpass = 0,
+            };
+
+            if (vk!.CreateGraphicsPipelines(logicalDevice, default, 1, pipelineCreateInfo, null, out graphicsPipeline) != Result.Success)
+            {
+                throw new Exception("Failed to create graphics pipeline");
             }
 
             vk!.DestroyShaderModule(logicalDevice, vertShaderModule, null);
