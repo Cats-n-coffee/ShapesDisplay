@@ -62,6 +62,8 @@ namespace ShapesDisplay
         private Pipeline graphicsPipeline;
 
         private Framebuffer[]? swapchainFramebuffers;
+        private CommandPool commandPool;
+        private CommandBuffer[]? commandBuffers;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
@@ -109,6 +111,8 @@ namespace ShapesDisplay
             CreateRenderPass();
             CreateGraphicsPipeline();
             CreateFramebuffers();
+            CreateCommandPool();
+            CreateCommandBuffers();
         }
 
         private void MainLoop()
@@ -118,6 +122,8 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
+            vk!.DestroyCommandPool(logicalDevice, commandPool, null);
+
             foreach (var framebuffer in swapchainFramebuffers!)
             {
                 vk!.DestroyFramebuffer(logicalDevice, framebuffer, null);
@@ -897,6 +903,103 @@ namespace ShapesDisplay
             }
         }
 
+        #endregion
+
+        #region Command Pool & Buffers
+        private void CreateCommandPool()
+        {
+            QueueFamilyIndices queueFamilyIndices = FindQueueFamilies(physicalDevice);
+
+            CommandPoolCreateInfo commandPoolCreateInfo = new()
+            {
+                SType = StructureType.CommandPoolCreateInfo,
+                Flags = CommandPoolCreateFlags.ResetCommandBufferBit,
+                QueueFamilyIndex = queueFamilyIndices.GraphicsFamily!.Value,
+            };
+
+            if (vk!.CreateCommandPool(logicalDevice, commandPoolCreateInfo, null, out commandPool) != Result.Success) 
+            {
+                throw new Exception("Failed to create command pool");
+            }
+        }
+
+        private void CreateCommandBuffers()
+        {
+            commandBuffers = new CommandBuffer[swapchainFramebuffers!.Length];
+
+            CommandBufferAllocateInfo commandBufferInfo = new()
+            {
+                SType = StructureType.CommandBufferAllocateInfo,
+                CommandPool = commandPool,
+                Level = CommandBufferLevel.Primary,
+                CommandBufferCount = (uint)commandBuffers.Length,
+            };
+
+            fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
+            {
+                if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, commandBuffersPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to allocate command buffer");
+                }
+            }
+
+            for (int i = 0; i < commandBuffers.Length; i++)
+            {
+                // copied
+                CommandBufferBeginInfo commandBufferBeginInfo = new()
+                {
+                    SType = StructureType.CommandBufferBeginInfo,
+                };
+
+                if (vk!.BeginCommandBuffer(commandBuffers[i], commandBufferBeginInfo) != Result.Success)
+                {
+                    throw new Exception("Failed to begin recording command buffer");
+                }
+                // end copied
+
+                RenderPassBeginInfo renderPassBeginInfo = new()
+                {
+                    SType = StructureType.RenderPassBeginInfo,
+                    RenderPass = renderPass,
+                    Framebuffer = swapchainFramebuffers[i],
+                    RenderArea = {
+                        Offset = { X = 0, Y = 0 },
+                        Extent = swapChainExtent,
+                    }
+                };
+
+                ClearValue clearColor = new()
+                {
+                    Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+                };
+
+                renderPassBeginInfo.ClearValueCount = 1;
+                renderPassBeginInfo.PClearValues = &clearColor;
+
+                vk!.CmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, SubpassContents.Inline);
+                vk!.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
+                vk!.CmdDraw(commandBuffers[i], 3, 1, 0, 0);
+                vk!.CmdEndRenderPass(commandBuffers[i]);
+
+                if (vk!.EndCommandBuffer(commandBuffers[i]) != Result.Success)
+                {
+                    throw new Exception("Failed to record command buffer");
+                }
+            }
+        }
+
+        private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
+        {
+            CommandBufferBeginInfo commandBufferBeginInfo = new()
+            {
+                SType = StructureType.CommandBufferBeginInfo,
+            };
+
+            if (vk!.BeginCommandBuffer(commandBuf, commandBufferBeginInfo) != Result.Success)
+            {
+                throw new Exception("Failed to begin recording command buffer");
+            }
+        }
         #endregion
     }
 }
