@@ -43,8 +43,8 @@ namespace ShapesDisplay
         private PhysicalDevice physicalDevice;
         private Device logicalDevice;
 
-        Queue graphicsQueue;
-        Queue presentQueue;
+        private Queue graphicsQueue;
+        private Queue presentQueue;
 
         private SurfaceKHR surface;
         private KhrSurface? khrSurface;
@@ -53,12 +53,15 @@ namespace ShapesDisplay
         private SwapchainKHR swapChain;
         private Image[]? swapChainImages;
         private Format swapChainImageFormat;
-        Extent2D swapChainExtent;
+        private Extent2D swapChainExtent;
+        private ImageView[]? swapchainImageViews; 
 
-        RenderPass renderPass;
-        PipelineLayout pipelineLayout;
+        private RenderPass renderPass;
+        private PipelineLayout pipelineLayout;
 
-        Pipeline graphicsPipeline;
+        private Pipeline graphicsPipeline;
+
+        private Framebuffer[]? swapchainFramebuffers;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
@@ -102,8 +105,10 @@ namespace ShapesDisplay
             PickPhysicalDevice();
             CreateLogicalDevice();
             CreateSwapChain();
+            CreateImageViews();
             CreateRenderPass();
             CreateGraphicsPipeline();
+            CreateFramebuffers();
         }
 
         private void MainLoop()
@@ -113,6 +118,11 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
+            foreach (var imageView in swapchainImageViews!)
+            {
+                vk!.DestroyImageView(logicalDevice, imageView, null);
+            }
+
             khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
 
             vk?.DestroyPipeline(logicalDevice, graphicsPipeline, null);
@@ -603,6 +613,43 @@ namespace ShapesDisplay
 
         #endregion
 
+        #region ImageViews
+        private void CreateImageViews()
+        {
+            swapchainImageViews = new ImageView[swapChainImages!.Length];
+
+            for (int i = 0; i < swapChainImages.Length; i++)
+            {
+                ImageViewCreateInfo imageViewInfo = new()
+                {
+                    SType = StructureType.ImageViewCreateInfo,
+                    Image = swapChainImages[i],
+                    ViewType = ImageViewType.Type2D,
+                    Format = swapChainImageFormat,
+                    Components = {
+                        R = ComponentSwizzle.Identity,
+                        G = ComponentSwizzle.Identity,
+                        B = ComponentSwizzle.Identity,
+                        A = ComponentSwizzle.Identity,
+                    },
+                    SubresourceRange = {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        BaseMipLevel = 0,
+                        LevelCount = 1,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1,
+                    },
+                };
+
+                if (vk!.CreateImageView(logicalDevice, imageViewInfo, null, out swapchainImageViews[i]) != Result.Success)
+                {
+                    throw new Exception("Failed to create image view");
+                }
+            } 
+        }
+
+        #endregion
+
         #region Render Pass
         private void CreateRenderPass()
         {
@@ -814,6 +861,14 @@ namespace ShapesDisplay
             }
 
             return shaderModule;
+        }
+
+        #endregion
+
+        #region Framebuffers
+        private void CreateFramebuffers()
+        {
+            // swapchainFramebuffers = new Framebuffer[swapchainIm];
         }
 
         #endregion
