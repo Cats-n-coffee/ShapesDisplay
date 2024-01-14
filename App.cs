@@ -118,6 +118,11 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
+            foreach (var framebuffer in swapchainFramebuffers!)
+            {
+                vk!.DestroyFramebuffer(logicalDevice, framebuffer, null);
+            }
+
             foreach (var imageView in swapchainImageViews!)
             {
                 vk!.DestroyImageView(logicalDevice, imageView, null);
@@ -868,7 +873,28 @@ namespace ShapesDisplay
         #region Framebuffers
         private void CreateFramebuffers()
         {
-            // swapchainFramebuffers = new Framebuffer[swapchainIm];
+            swapchainFramebuffers = new Framebuffer[swapchainImageViews!.Length];
+
+            for (int i = 0; i < swapchainImageViews.Length; i++)
+            {
+                var attachment = swapchainImageViews[i];
+
+                FramebufferCreateInfo framebufferInfo = new()
+                {
+                    SType = StructureType.FramebufferCreateInfo,
+                    RenderPass = renderPass,
+                    AttachmentCount = 1,
+                    PAttachments = &attachment,
+                    Width = swapChainExtent.Width,
+                    Height = swapChainExtent.Height,
+                    Layers = 1,
+                };
+
+                if (vk!.CreateFramebuffer(logicalDevice, framebufferInfo, null, out swapchainFramebuffers[i]) != Result.Success)
+                {
+                    throw new Exception("Failed to create framebuffer");
+                }
+            }
         }
 
         #endregion
