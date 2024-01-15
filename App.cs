@@ -9,6 +9,7 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 using System.Diagnostics;
 
 struct QueueFamilyIndices
@@ -63,7 +64,11 @@ namespace ShapesDisplay
 
         private Framebuffer[]? swapchainFramebuffers;
         private CommandPool commandPool;
-        private CommandBuffer[]? commandBuffers;
+        private CommandBuffer commandBuffer;
+        // private CommandBuffer[]? commandBuffers;
+        private Semaphore ImageAvailableSemaphore;
+        private Semaphore RenderFinishedSemaphore;
+        private Fence InFlightFence;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
@@ -113,15 +118,22 @@ namespace ShapesDisplay
             CreateFramebuffers();
             CreateCommandPool();
             CreateCommandBuffers();
+            CreateSyncObjects();
         }
 
         private void MainLoop()
         {
-            _window?.Run();
+            _window!.Render += DrawFrame;
+            _window!.Run();
+            vk!.DeviceWaitIdle(logicalDevice);
         }
 
         private void CleanUp()
         {
+            vk!.DestroySemaphore(logicalDevice, ImageAvailableSemaphore, null);
+            vk!.DestroySemaphore(logicalDevice, RenderFinishedSemaphore, null);
+            vk!.DestroyFence(logicalDevice, InFlightFence, null);
+
             vk!.DestroyCommandPool(logicalDevice, commandPool, null);
 
             foreach (var framebuffer in swapchainFramebuffers!)
@@ -689,6 +701,16 @@ namespace ShapesDisplay
                 PColorAttachments = &colorAttachmentRef,
             };
 
+            SubpassDependency subpassDependency = new()
+            {
+                SrcSubpass = Vk.SubpassExternal,
+                DstSubpass = 0,
+                SrcStageMask = PipelineStageFlags.ColorAttachmentOutputBit,
+                SrcAccessMask = 0,
+                DstStageMask = PipelineStageFlags.ColorAttachmentOutputBit,
+                DstAccessMask = AccessFlags.ColorAttachmentWriteBit,
+            };
+
             RenderPassCreateInfo renderPassCreateInfo = new()
             {
                 SType = StructureType.RenderPassCreateInfo,
@@ -696,6 +718,8 @@ namespace ShapesDisplay
                 PAttachments = &colorAttachment,
                 SubpassCount = 1,
                 PSubpasses = &subpass,
+                DependencyCount = 1,
+                PDependencies = &subpassDependency,
             };
 
             if (vk!.CreateRenderPass(logicalDevice, renderPassCreateInfo, null, out renderPass) != Result.Success)
@@ -925,67 +949,73 @@ namespace ShapesDisplay
 
         private void CreateCommandBuffers()
         {
-            commandBuffers = new CommandBuffer[swapchainFramebuffers!.Length];
+            // commandBuffers = new CommandBuffer[swapchainFramebuffers!.Length];
 
             CommandBufferAllocateInfo commandBufferInfo = new()
             {
                 SType = StructureType.CommandBufferAllocateInfo,
                 CommandPool = commandPool,
                 Level = CommandBufferLevel.Primary,
-                CommandBufferCount = (uint)commandBuffers.Length,
+                // CommandBufferCount = (uint)commandBuffers.Length,
+                CommandBufferCount = 1,
             };
 
-            fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
+            if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, out commandBuffer) != Result.Success)
             {
-                if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, commandBuffersPtr) != Result.Success)
-                {
-                    throw new Exception("Failed to allocate command buffer");
-                }
+                throw new Exception("Failed to allocate command buffer");
             }
 
-            for (int i = 0; i < commandBuffers.Length; i++)
-            {
-                // copied
-                CommandBufferBeginInfo commandBufferBeginInfo = new()
-                {
-                    SType = StructureType.CommandBufferBeginInfo,
-                };
+            //fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
+            //{
+            //    if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, commandBuffersPtr) != Result.Success)
+            //    {
+            //        throw new Exception("Failed to allocate command buffer");
+            //    }
+            //}
 
-                if (vk!.BeginCommandBuffer(commandBuffers[i], commandBufferBeginInfo) != Result.Success)
-                {
-                    throw new Exception("Failed to begin recording command buffer");
-                }
-                // end copied
+            //for (int i = 0; i < commandBuffers.Length; i++)
+            //{
+            //    // copied
+            //    CommandBufferBeginInfo commandBufferBeginInfo = new()
+            //    {
+            //        SType = StructureType.CommandBufferBeginInfo,
+            //    };
 
-                RenderPassBeginInfo renderPassBeginInfo = new()
-                {
-                    SType = StructureType.RenderPassBeginInfo,
-                    RenderPass = renderPass,
-                    Framebuffer = swapchainFramebuffers[i],
-                    RenderArea = {
-                        Offset = { X = 0, Y = 0 },
-                        Extent = swapChainExtent,
-                    }
-                };
+            //    if (vk!.BeginCommandBuffer(commandBuffers[i], commandBufferBeginInfo) != Result.Success)
+            //    {
+            //        throw new Exception("Failed to begin recording command buffer");
+            //    }
+            //    // end copied
 
-                ClearValue clearColor = new()
-                {
-                    Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
-                };
+            //    RenderPassBeginInfo renderPassBeginInfo = new()
+            //    {
+            //        SType = StructureType.RenderPassBeginInfo,
+            //        RenderPass = renderPass,
+            //        Framebuffer = swapchainFramebuffers[i],
+            //        RenderArea = {
+            //            Offset = { X = 0, Y = 0 },
+            //            Extent = swapChainExtent,
+            //        }
+            //    };
 
-                renderPassBeginInfo.ClearValueCount = 1;
-                renderPassBeginInfo.PClearValues = &clearColor;
+            //    ClearValue clearColor = new()
+            //    {
+            //        Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+            //    };
 
-                vk!.CmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, SubpassContents.Inline);
-                vk!.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
-                vk!.CmdDraw(commandBuffers[i], 3, 1, 0, 0);
-                vk!.CmdEndRenderPass(commandBuffers[i]);
+            //    renderPassBeginInfo.ClearValueCount = 1;
+            //    renderPassBeginInfo.PClearValues = &clearColor;
 
-                if (vk!.EndCommandBuffer(commandBuffers[i]) != Result.Success)
-                {
-                    throw new Exception("Failed to record command buffer");
-                }
-            }
+            //    vk!.CmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, SubpassContents.Inline);
+            //    vk!.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
+            //    vk!.CmdDraw(commandBuffers[i], 3, 1, 0, 0);
+            //    vk!.CmdEndRenderPass(commandBuffers[i]);
+
+            //    if (vk!.EndCommandBuffer(commandBuffers[i]) != Result.Success)
+            //    {
+            //        throw new Exception("Failed to record command buffer");
+            //    }
+            //}
         }
 
         private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
@@ -999,7 +1029,118 @@ namespace ShapesDisplay
             {
                 throw new Exception("Failed to begin recording command buffer");
             }
+
+            RenderPassBeginInfo renderPassBeginInfo = new()
+            {
+                SType = StructureType.RenderPassBeginInfo,
+                RenderPass = renderPass,
+                Framebuffer = swapchainFramebuffers[imageIndex],
+                RenderArea = {
+                        Offset = { X = 0, Y = 0 },
+                        Extent = swapChainExtent,
+                    }
+            };
+
+            ClearValue clearColor = new()
+            {
+                Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+            };
+
+            renderPassBeginInfo.ClearValueCount = 1;
+            renderPassBeginInfo.PClearValues = &clearColor;
+
+            vk!.CmdBeginRenderPass(commandBuffer, renderPassBeginInfo, SubpassContents.Inline);
+            vk!.CmdBindPipeline(commandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
+            vk!.CmdDraw(commandBuffer, 3, 1, 0, 0);
+            vk!.CmdEndRenderPass(commandBuffer);
+
+            if (vk!.EndCommandBuffer(commandBuffer) != Result.Success)
+            {
+                throw new Exception("Failed to record command buffer");
+            }
         }
+        #endregion
+
+        #region Draw
+        private void DrawFrame(double delta)
+        {
+            vk!.WaitForFences(logicalDevice, 1, InFlightFence, true, ulong.MaxValue);
+            vk!.ResetFences(logicalDevice, 1, InFlightFence);
+
+            uint indexImage = 0;
+            khrSwapChain!.AcquireNextImage(logicalDevice, swapChain, ulong.MaxValue, ImageAvailableSemaphore, default, ref indexImage);
+
+            vk!.ResetCommandBuffer(commandBuffer, 0);
+            RecordCommandBuffer(commandBuffer, indexImage);
+
+            SubmitInfo submitInfo = new()
+            {
+                SType = StructureType.SubmitInfo,
+            };
+
+            var waitSemaphores = stackalloc[] { ImageAvailableSemaphore };
+            var waitStages = stackalloc[]{ PipelineStageFlags.ColorAttachmentOutputBit };
+
+            fixed (CommandBuffer* commandBufferPtr = &commandBuffer)
+            {
+                submitInfo = submitInfo with
+                {
+                    WaitSemaphoreCount = 1,
+                    PWaitSemaphores = waitSemaphores,
+                    PWaitDstStageMask = waitStages,
+                    CommandBufferCount = 1,
+                    PCommandBuffers = commandBufferPtr,
+                };
+            }
+
+            var signalSemaphores = stackalloc[] { RenderFinishedSemaphore };
+
+            submitInfo.PSignalSemaphores = signalSemaphores;
+            submitInfo.SignalSemaphoreCount = 1;
+
+            if (vk!.QueueSubmit(graphicsQueue, 1, submitInfo, InFlightFence) != Result.Success)
+            {
+                throw new Exception("Failed to submit draw command buffer");
+            }
+
+            var swapChains = stackalloc[] { swapChain };
+
+            PresentInfoKHR presentInfo = new()
+            {
+                SType = StructureType.PresentInfoKhr,
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = signalSemaphores,
+                SwapchainCount = 1,
+                PSwapchains = swapChains,
+                PImageIndices = &indexImage,
+            };
+
+            khrSwapChain.QueuePresent(presentQueue, presentInfo);
+        }
+
+        private void CreateSyncObjects()
+        {
+            SemaphoreCreateInfo semaphoreCreateInfo = new()
+            {
+                SType = StructureType.SemaphoreCreateInfo,
+            };
+
+            FenceCreateInfo fenceCreateInfo = new()
+            {
+                SType = StructureType.FenceCreateInfo,
+                Flags = FenceCreateFlags.SignaledBit,
+            };
+
+            if (
+                vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out ImageAvailableSemaphore) != Result.Success
+                || vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out RenderFinishedSemaphore) != Result.Success
+                || vk!.CreateFence(logicalDevice, fenceCreateInfo, null, out InFlightFence) != Result.Success
+            )
+            {
+                throw new Exception("Failed to create semaphores or fences");
+            }
+        }
+
         #endregion
     }
 }
