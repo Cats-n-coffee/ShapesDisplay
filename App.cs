@@ -36,6 +36,8 @@ namespace ShapesDisplay
         const int WIDTH = 800;
         const int HEIGHT = 600;
 
+        const int MAX_FRAMES_IN_FLIGHT = 2;
+
         private IWindow? _window;
         private Vk? vk;
 
@@ -64,11 +66,11 @@ namespace ShapesDisplay
 
         private Framebuffer[]? swapchainFramebuffers;
         private CommandPool commandPool;
-        private CommandBuffer commandBuffer;
-        // private CommandBuffer[]? commandBuffers;
-        private Semaphore ImageAvailableSemaphore;
-        private Semaphore RenderFinishedSemaphore;
-        private Fence InFlightFence;
+        private CommandBuffer[]? commandBuffers;
+        private Semaphore[]? imageAvailableSemaphores;
+        private Semaphore[]? renderFinishedSemaphores;
+        private Fence[]? inFlightFences;
+        private int currentFrame = 0;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger; 
@@ -130,9 +132,12 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
-            vk!.DestroySemaphore(logicalDevice, ImageAvailableSemaphore, null);
-            vk!.DestroySemaphore(logicalDevice, RenderFinishedSemaphore, null);
-            vk!.DestroyFence(logicalDevice, InFlightFence, null);
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+            {
+                vk!.DestroySemaphore(logicalDevice, imageAvailableSemaphores![i], null);
+                vk!.DestroySemaphore(logicalDevice, renderFinishedSemaphores![i], null);
+                vk!.DestroyFence(logicalDevice, inFlightFences![i], null);
+            }
 
             vk!.DestroyCommandPool(logicalDevice, commandPool, null);
 
@@ -949,29 +954,23 @@ namespace ShapesDisplay
 
         private void CreateCommandBuffers()
         {
-            // commandBuffers = new CommandBuffer[swapchainFramebuffers!.Length];
+            commandBuffers = new CommandBuffer[MAX_FRAMES_IN_FLIGHT];
 
             CommandBufferAllocateInfo commandBufferInfo = new()
             {
                 SType = StructureType.CommandBufferAllocateInfo,
                 CommandPool = commandPool,
                 Level = CommandBufferLevel.Primary,
-                // CommandBufferCount = (uint)commandBuffers.Length,
-                CommandBufferCount = 1,
+                CommandBufferCount = (uint)commandBuffers.Length,
             };
 
-            if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, out commandBuffer) != Result.Success)
+            fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
             {
-                throw new Exception("Failed to allocate command buffer");
+                if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, commandBuffersPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to allocate command buffers");
+                }
             }
-
-            //fixed (CommandBuffer* commandBuffersPtr = commandBuffers)
-            //{
-            //    if (vk!.AllocateCommandBuffers(logicalDevice, commandBufferInfo, commandBuffersPtr) != Result.Success)
-            //    {
-            //        throw new Exception("Failed to allocate command buffer");
-            //    }
-            //}
 
             //for (int i = 0; i < commandBuffers.Length; i++)
             //{
@@ -1049,12 +1048,12 @@ namespace ShapesDisplay
             renderPassBeginInfo.ClearValueCount = 1;
             renderPassBeginInfo.PClearValues = &clearColor;
 
-            vk!.CmdBeginRenderPass(commandBuffer, renderPassBeginInfo, SubpassContents.Inline);
-            vk!.CmdBindPipeline(commandBuffer, PipelineBindPoint.Graphics, graphicsPipeline);
-            vk!.CmdDraw(commandBuffer, 3, 1, 0, 0);
-            vk!.CmdEndRenderPass(commandBuffer);
+            vk!.CmdBeginRenderPass(commandBuf, renderPassBeginInfo, SubpassContents.Inline);
+            vk!.CmdBindPipeline(commandBuf, PipelineBindPoint.Graphics, graphicsPipeline);
+            vk!.CmdDraw(commandBuf, 3, 1, 0, 0);
+            vk!.CmdEndRenderPass(commandBuf);
 
-            if (vk!.EndCommandBuffer(commandBuffer) != Result.Success)
+            if (vk!.EndCommandBuffer(commandBuf) != Result.Success)
             {
                 throw new Exception("Failed to record command buffer");
             }
@@ -1064,41 +1063,40 @@ namespace ShapesDisplay
         #region Draw
         private void DrawFrame(double delta)
         {
-            vk!.WaitForFences(logicalDevice, 1, InFlightFence, true, ulong.MaxValue);
-            vk!.ResetFences(logicalDevice, 1, InFlightFence);
+            vk!.WaitForFences(logicalDevice, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
+            vk!.ResetFences(logicalDevice, 1, inFlightFences![currentFrame]);
 
             uint indexImage = 0;
-            khrSwapChain!.AcquireNextImage(logicalDevice, swapChain, ulong.MaxValue, ImageAvailableSemaphore, default, ref indexImage);
+            khrSwapChain!.AcquireNextImage(logicalDevice, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref indexImage);
 
-            vk!.ResetCommandBuffer(commandBuffer, 0);
-            RecordCommandBuffer(commandBuffer, indexImage);
+            vk!.ResetCommandBuffer(commandBuffers![currentFrame], 0);
+            RecordCommandBuffer(commandBuffers![currentFrame], indexImage);
 
             SubmitInfo submitInfo = new()
             {
                 SType = StructureType.SubmitInfo,
             };
 
-            var waitSemaphores = stackalloc[] { ImageAvailableSemaphore };
+            var waitSemaphores = stackalloc[] { imageAvailableSemaphores[currentFrame] };
             var waitStages = stackalloc[]{ PipelineStageFlags.ColorAttachmentOutputBit };
 
-            fixed (CommandBuffer* commandBufferPtr = &commandBuffer)
-            {
-                submitInfo = submitInfo with
-                {
-                    WaitSemaphoreCount = 1,
-                    PWaitSemaphores = waitSemaphores,
-                    PWaitDstStageMask = waitStages,
-                    CommandBufferCount = 1,
-                    PCommandBuffers = commandBufferPtr,
-                };
-            }
+            var buffer = commandBuffers[currentFrame];
 
-            var signalSemaphores = stackalloc[] { RenderFinishedSemaphore };
+            submitInfo = submitInfo with
+            {
+                WaitSemaphoreCount = 1,
+                PWaitSemaphores = waitSemaphores,
+                PWaitDstStageMask = waitStages,
+                CommandBufferCount = 1,
+                PCommandBuffers = &buffer,
+            };
+
+            var signalSemaphores = stackalloc[] { renderFinishedSemaphores![currentFrame] };
 
             submitInfo.PSignalSemaphores = signalSemaphores;
             submitInfo.SignalSemaphoreCount = 1;
 
-            if (vk!.QueueSubmit(graphicsQueue, 1, submitInfo, InFlightFence) != Result.Success)
+            if (vk!.QueueSubmit(graphicsQueue, 1, submitInfo, inFlightFences![currentFrame]) != Result.Success)
             {
                 throw new Exception("Failed to submit draw command buffer");
             }
@@ -1116,10 +1114,16 @@ namespace ShapesDisplay
             };
 
             khrSwapChain.QueuePresent(presentQueue, presentInfo);
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
 
         private void CreateSyncObjects()
         {
+            imageAvailableSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
+            renderFinishedSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
+            inFlightFences = new Fence[MAX_FRAMES_IN_FLIGHT];
+
             SemaphoreCreateInfo semaphoreCreateInfo = new()
             {
                 SType = StructureType.SemaphoreCreateInfo,
@@ -1131,14 +1135,19 @@ namespace ShapesDisplay
                 Flags = FenceCreateFlags.SignaledBit,
             };
 
-            if (
-                vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out ImageAvailableSemaphore) != Result.Success
-                || vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out RenderFinishedSemaphore) != Result.Success
-                || vk!.CreateFence(logicalDevice, fenceCreateInfo, null, out InFlightFence) != Result.Success
-            )
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
             {
-                throw new Exception("Failed to create semaphores or fences");
+                if (
+                vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out imageAvailableSemaphores[i]) != Result.Success
+                || vk!.CreateSemaphore(logicalDevice, semaphoreCreateInfo, null, out renderFinishedSemaphores[i]) != Result.Success
+                || vk!.CreateFence(logicalDevice, fenceCreateInfo, null, out inFlightFences[i]) != Result.Success
+            )
+                {
+                    throw new Exception("Failed to create semaphores or fences for a frame");
+                }
             }
+
+            
         }
 
         #endregion
