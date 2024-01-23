@@ -57,7 +57,7 @@ namespace ShapesDisplay
         private Image[]? swapChainImages;
         private Format swapChainImageFormat;
         private Extent2D swapChainExtent;
-        private ImageView[]? swapchainImageViews; 
+        private ImageView[]? swapchainImageViews;
 
         private RenderPass renderPass;
         private PipelineLayout pipelineLayout;
@@ -71,18 +71,19 @@ namespace ShapesDisplay
         private Semaphore[]? renderFinishedSemaphores;
         private Fence[]? inFlightFences;
         private int currentFrame = 0;
+        private bool framebufferResized = false;
 
         private ExtDebugUtils? debugUtils;
-        private DebugUtilsMessengerEXT debugMessenger; 
+        private DebugUtilsMessengerEXT debugMessenger;
 
         private readonly string[] validationLayers = { "VK_LAYER_KHRONOS_validation" };
         private readonly string[] deviceExtensions = { KhrSwapchain.ExtensionName };
 
-        #if DEBUG
+#if DEBUG
         private readonly bool enableValidationLayers = true;
-        #else
+#else
         private readonly bool enableValidationLayers = false;
-        #endif
+#endif
 
         public void Run()
         {
@@ -104,6 +105,13 @@ namespace ShapesDisplay
             _window.Initialize();
 
             if (_window.VkSurface is null) throw new Exception("Windowing platform doesn't support Vulkan.");
+
+            _window.Resize += FramebufferResizeCallback;
+        }
+
+        private void FramebufferResizeCallback(Vector2D<int> obj)
+        {
+            framebufferResized = true;
         }
 
         private void InitVulkan()
@@ -132,6 +140,12 @@ namespace ShapesDisplay
 
         private void CleanUp()
         {
+            CleanUpSwapChain();
+
+            vk?.DestroyPipeline(logicalDevice, graphicsPipeline, null);
+            vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
+            vk?.DestroyRenderPass(logicalDevice, renderPass, null);
+
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
             {
                 vk!.DestroySemaphore(logicalDevice, imageAvailableSemaphores![i], null);
@@ -140,22 +154,6 @@ namespace ShapesDisplay
             }
 
             vk!.DestroyCommandPool(logicalDevice, commandPool, null);
-
-            foreach (var framebuffer in swapchainFramebuffers!)
-            {
-                vk!.DestroyFramebuffer(logicalDevice, framebuffer, null);
-            }
-
-            foreach (var imageView in swapchainImageViews!)
-            {
-                vk!.DestroyImageView(logicalDevice, imageView, null);
-            }
-
-            khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
-
-            vk?.DestroyPipeline(logicalDevice, graphicsPipeline, null);
-            vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
-            vk?.DestroyRenderPass(logicalDevice, renderPass, null);
 
             vk?.DestroyDevice(logicalDevice, null);
 
@@ -166,7 +164,7 @@ namespace ShapesDisplay
 
             khrSurface!.DestroySurface(instance, surface, null);
             vk?.DestroyInstance(instance, null);
-            
+
             vk?.Dispose();
             _window?.Dispose();
         }
@@ -178,7 +176,7 @@ namespace ShapesDisplay
             if (enableValidationLayers && !CheckValidationLayerSupport())
             {
                 throw new Exception("No support for validation layers");
-            } 
+            }
 
             ApplicationInfo appInfo = new ApplicationInfo()
             {
@@ -262,7 +260,7 @@ namespace ShapesDisplay
 
             var availableLayers = new LayerProperties[layerCount];
 
-            fixed(LayerProperties* availableLayersPointer = availableLayers)
+            fixed (LayerProperties* availableLayersPointer = availableLayers)
             {
                 vk?.EnumerateInstanceLayerProperties(ref layerCount, availableLayersPointer);
             }
@@ -330,7 +328,7 @@ namespace ShapesDisplay
                 vk!.EnumeratePhysicalDevices(instance, ref deviceCount, devicesPtr);
             }
 
-            foreach(var device in devices)
+            foreach (var device in devices)
             {
                 if (IsSuitableDevice(device))
                 {
@@ -386,13 +384,13 @@ namespace ShapesDisplay
             vk!.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilyCount, null);
 
             var queueFamilies = new QueueFamilyProperties[queueFamilyCount];
-            fixed(QueueFamilyProperties* queueFamiliesPtr = queueFamilies)
+            fixed (QueueFamilyProperties* queueFamiliesPtr = queueFamilies)
             {
                 vk!.GetPhysicalDeviceQueueFamilyProperties(device, ref queueFamilyCount, queueFamiliesPtr);
             }
-            
+
             uint i = 0;
-            foreach(var queueFamily in queueFamilies)
+            foreach (var queueFamily in queueFamilies)
             {
                 if (queueFamily.QueueFlags.HasFlag(QueueFlags.GraphicsBit))
                 {
@@ -425,7 +423,7 @@ namespace ShapesDisplay
             uniqueQueueFamilies = uniqueQueueFamilies.Distinct().ToArray();
 
             using var mem = GlobalMemory.Allocate(uniqueQueueFamilies.Length * sizeof(DeviceQueueCreateInfo));
-            var queueCreateInfos = (DeviceQueueCreateInfo*)Unsafe.AsPointer(ref mem.GetPinnableReference()); 
+            var queueCreateInfos = (DeviceQueueCreateInfo*)Unsafe.AsPointer(ref mem.GetPinnableReference());
 
             float queuePriority = 1.0f;
             for (int i = 0; i < uniqueQueueFamilies.Length; i++)
@@ -450,7 +448,7 @@ namespace ShapesDisplay
                 EnabledExtensionCount = (uint)deviceExtensions.Length,
                 PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(deviceExtensions),
             };
-            
+
             if (enableValidationLayers)
             {
                 deviceCreateInfo.EnabledLayerCount = (uint)validationLayers.Length;
@@ -545,7 +543,7 @@ namespace ShapesDisplay
             khrSwapChain!.GetSwapchainImages(logicalDevice, swapChain, ref imageCount, null);
             swapChainImages = new Image[imageCount];
 
-            fixed(Image* swapChainImagesPtr = swapChainImages)
+            fixed (Image* swapChainImagesPtr = swapChainImages)
             {
                 khrSwapChain!.GetSwapchainImages(logicalDevice, swapChain, ref imageCount, swapChainImagesPtr);
             }
@@ -553,6 +551,40 @@ namespace ShapesDisplay
             swapChainImageFormat = surfaceFormat.Format;
             swapChainExtent = swapExtent;
         }
+
+        void RecreateSwapChain()
+        {
+            Vector2D<int> framebufferSize = _window!.FramebufferSize;
+
+            while (framebufferSize.X == 0 &&  framebufferSize.Y == 0)
+            {
+                framebufferSize = _window.FramebufferSize;
+                _window.DoEvents();
+            }
+            vk!.DeviceWaitIdle(logicalDevice);
+
+            CleanUpSwapChain();
+
+            CreateSwapChain();
+            CreateImageViews();
+            CreateFramebuffers();
+        }
+
+        void CleanUpSwapChain()
+        {
+            foreach (var framebuffer in swapchainFramebuffers!)
+            {
+                vk!.DestroyFramebuffer(logicalDevice, framebuffer, null);
+            }
+
+            foreach (var imageView in swapchainImageViews!)
+            {
+                vk!.DestroyImageView(logicalDevice, imageView, null);
+            }
+
+            khrSwapChain?.DestroySwapchain(logicalDevice, swapChain, null);
+        }
+
         private SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice device)
         {
             var details = new SwapChainSupportDetails();
@@ -605,7 +637,7 @@ namespace ShapesDisplay
 
         private PresentModeKHR ChooseSwapPresentMode(IReadOnlyList<PresentModeKHR> availablePresentModes)
         {
-            foreach(var availablePresentMode in availablePresentModes)
+            foreach (var availablePresentMode in availablePresentModes)
             {
                 if (availablePresentMode == PresentModeKHR.MailboxKhr)
                 {
@@ -673,7 +705,7 @@ namespace ShapesDisplay
                 {
                     throw new Exception("Failed to create image view");
                 }
-            } 
+            }
         }
 
         #endregion
@@ -762,7 +794,7 @@ namespace ShapesDisplay
                 PName = (byte*)SilkMarshal.StringToPtr("main"),
             };
 
-            var shaderStages = stackalloc[]{ vertShaderStageInfo, fragShaderStageInfo };
+            var shaderStages = stackalloc[] { vertShaderStageInfo, fragShaderStageInfo };
 
             PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new()
             {
@@ -946,7 +978,7 @@ namespace ShapesDisplay
                 QueueFamilyIndex = queueFamilyIndices.GraphicsFamily!.Value,
             };
 
-            if (vk!.CreateCommandPool(logicalDevice, commandPoolCreateInfo, null, out commandPool) != Result.Success) 
+            if (vk!.CreateCommandPool(logicalDevice, commandPoolCreateInfo, null, out commandPool) != Result.Success)
             {
                 throw new Exception("Failed to create command pool");
             }
@@ -971,50 +1003,6 @@ namespace ShapesDisplay
                     throw new Exception("Failed to allocate command buffers");
                 }
             }
-
-            //for (int i = 0; i < commandBuffers.Length; i++)
-            //{
-            //    // copied
-            //    CommandBufferBeginInfo commandBufferBeginInfo = new()
-            //    {
-            //        SType = StructureType.CommandBufferBeginInfo,
-            //    };
-
-            //    if (vk!.BeginCommandBuffer(commandBuffers[i], commandBufferBeginInfo) != Result.Success)
-            //    {
-            //        throw new Exception("Failed to begin recording command buffer");
-            //    }
-            //    // end copied
-
-            //    RenderPassBeginInfo renderPassBeginInfo = new()
-            //    {
-            //        SType = StructureType.RenderPassBeginInfo,
-            //        RenderPass = renderPass,
-            //        Framebuffer = swapchainFramebuffers[i],
-            //        RenderArea = {
-            //            Offset = { X = 0, Y = 0 },
-            //            Extent = swapChainExtent,
-            //        }
-            //    };
-
-            //    ClearValue clearColor = new()
-            //    {
-            //        Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
-            //    };
-
-            //    renderPassBeginInfo.ClearValueCount = 1;
-            //    renderPassBeginInfo.PClearValues = &clearColor;
-
-            //    vk!.CmdBeginRenderPass(commandBuffers[i], renderPassBeginInfo, SubpassContents.Inline);
-            //    vk!.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
-            //    vk!.CmdDraw(commandBuffers[i], 3, 1, 0, 0);
-            //    vk!.CmdEndRenderPass(commandBuffers[i]);
-
-            //    if (vk!.EndCommandBuffer(commandBuffers[i]) != Result.Success)
-            //    {
-            //        throw new Exception("Failed to record command buffer");
-            //    }
-            //}
         }
 
         private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
@@ -1064,10 +1052,20 @@ namespace ShapesDisplay
         private void DrawFrame(double delta)
         {
             vk!.WaitForFences(logicalDevice, 1, inFlightFences![currentFrame], true, ulong.MaxValue);
-            vk!.ResetFences(logicalDevice, 1, inFlightFences![currentFrame]);
 
             uint indexImage = 0;
-            khrSwapChain!.AcquireNextImage(logicalDevice, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref indexImage);
+            Result result = khrSwapChain!.AcquireNextImage(logicalDevice, swapChain, ulong.MaxValue, imageAvailableSemaphores![currentFrame], default, ref indexImage);
+
+            if (result == Result.ErrorOutOfDateKhr)
+            {
+                RecreateSwapChain();
+                return;
+            } else if (result != Result.Success && result != Result.SuboptimalKhr)
+            {
+                throw new Exception("Failed to acquire swap chain image.");
+            }
+
+            vk!.ResetFences(logicalDevice, 1, inFlightFences![currentFrame]);
 
             vk!.ResetCommandBuffer(commandBuffers![currentFrame], 0);
             RecordCommandBuffer(commandBuffers![currentFrame], indexImage);
@@ -1113,7 +1111,16 @@ namespace ShapesDisplay
                 PImageIndices = &indexImage,
             };
 
-            khrSwapChain.QueuePresent(presentQueue, presentInfo);
+            result = khrSwapChain.QueuePresent(presentQueue, presentInfo);
+
+            if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr || framebufferResized)
+            {
+                framebufferResized = false;
+                RecreateSwapChain();
+            } else if (result != Result.Success)
+            {
+                throw new Exception("Failed to present swap chain image.");
+            }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
