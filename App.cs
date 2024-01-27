@@ -9,8 +9,9 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
-using Semaphore = Silk.NET.Vulkan.Semaphore;
 using System.Diagnostics;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
+using Buffer = Silk.NET.Vulkan.Buffer;
 
 struct QueueFamilyIndices
 {
@@ -27,6 +28,47 @@ struct SwapChainSupportDetails
     public SurfaceCapabilitiesKHR Capabilities;
     public SurfaceFormatKHR[] Formats;
     public PresentModeKHR[] PresentModes;
+}
+
+struct Vertex
+{
+    public Vector2D<float> pos;
+    public Vector3D<float> color;
+
+    public static VertexInputBindingDescription GetBindingDescription()
+    {
+        VertexInputBindingDescription bindingDescription = new()
+        {
+            Binding = 0,
+            Stride = (uint)Unsafe.SizeOf<Vertex>(),
+            InputRate = VertexInputRate.Vertex,
+        };
+
+        return bindingDescription;
+    }
+
+    public static VertexInputAttributeDescription[] GetAttributeDescriptions()
+    {
+        var attributeDescriptions = new[]
+        {
+            new VertexInputAttributeDescription()
+            {
+                Binding = 0,
+                Location = 0,
+                Format = Format.R32G32Sfloat,
+                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(pos)),
+            },
+            new VertexInputAttributeDescription()
+            {
+                Binding = 0,
+                Location = 1,
+                Format = Format.R32G32B32Sfloat,
+                Offset = (uint)Marshal.OffsetOf<Vertex>(nameof(color)),
+            }
+        };
+
+        return attributeDescriptions;
+    }
 }
 
 namespace ShapesDisplay
@@ -70,8 +112,19 @@ namespace ShapesDisplay
         private Semaphore[]? imageAvailableSemaphores;
         private Semaphore[]? renderFinishedSemaphores;
         private Fence[]? inFlightFences;
+        private Fence[]? imagesInFlight;
         private int currentFrame = 0;
         private bool framebufferResized = false;
+
+        private Vertex[] vertices = new Vertex[]
+        {
+            new Vertex { pos = new Vector2D<float>(0.0f,-0.5f), color = new Vector3D<float>(1.0f, 0.0f, 0.0f) },
+            new Vertex { pos = new Vector2D<float>(0.5f,0.5f), color = new Vector3D<float>(0.0f, 1.0f, 0.0f) },
+            new Vertex { pos = new Vector2D<float>(-0.5f,0.5f), color = new Vector3D<float>(0.0f, 0.0f, 1.0f) },
+        };
+
+        Buffer vertexBuffer;
+        DeviceMemory vertexBufferMemory;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger;
@@ -127,6 +180,7 @@ namespace ShapesDisplay
             CreateGraphicsPipeline();
             CreateFramebuffers();
             CreateCommandPool();
+            CreateVertexBuffer();
             CreateCommandBuffers();
             CreateSyncObjects();
         }
@@ -141,6 +195,9 @@ namespace ShapesDisplay
         private void CleanUp()
         {
             CleanUpSwapChain();
+
+            vk!.DestroyBuffer(logicalDevice, vertexBuffer, null);
+            vk!.FreeMemory(logicalDevice, vertexBufferMemory, null);
 
             vk?.DestroyPipeline(logicalDevice, graphicsPipeline, null);
             vk?.DestroyPipelineLayout(logicalDevice, pipelineLayout, null);
@@ -567,7 +624,12 @@ namespace ShapesDisplay
 
             CreateSwapChain();
             CreateImageViews();
+            CreateRenderPass();
+            CreateGraphicsPipeline();
             CreateFramebuffers();
+            CreateCommandBuffers();
+
+            imagesInFlight = new Fence[swapChainImages!.Length];
         }
 
         void CleanUpSwapChain()
@@ -796,113 +858,128 @@ namespace ShapesDisplay
 
             var shaderStages = stackalloc[] { vertShaderStageInfo, fragShaderStageInfo };
 
-            PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new()
-            {
-                SType = StructureType.PipelineVertexInputStateCreateInfo,
-                VertexBindingDescriptionCount = 0,
-                PVertexBindingDescriptions = null,
-                VertexAttributeDescriptionCount = 0,
-                PVertexAttributeDescriptions = null,
-            };
+            var bindingDescription = Vertex.GetBindingDescription();
+            var attributeDescriptions = Vertex.GetAttributeDescriptions();
 
-            PipelineInputAssemblyStateCreateInfo assemblyStateCreateInfo = new()
+            fixed (VertexInputAttributeDescription* attributeDescriptionsPtr = attributeDescriptions)
             {
-                SType = StructureType.PipelineInputAssemblyStateCreateInfo,
-                Topology = PrimitiveTopology.TriangleList,
-                PrimitiveRestartEnable = false,
-            };
+                PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new()
+                {
+                    SType = StructureType.PipelineVertexInputStateCreateInfo,
+                    VertexBindingDescriptionCount = 1,
+                    PVertexBindingDescriptions = &bindingDescription,
+                    VertexAttributeDescriptionCount = (uint)attributeDescriptions.Length,
+                    PVertexAttributeDescriptions = attributeDescriptionsPtr,
+                };
 
-            Viewport viewport = new()
-            {
-                X = 0.0f, Y = 0.0f,
-                Width = swapChainExtent.Width,
-                Height = swapChainExtent.Height,
-                MinDepth = 0.0f,
-                MaxDepth = 1.0f,
-            };
+                PipelineInputAssemblyStateCreateInfo assemblyStateCreateInfo = new()
+                {
+                    SType = StructureType.PipelineInputAssemblyStateCreateInfo,
+                    Topology = PrimitiveTopology.TriangleList,
+                    PrimitiveRestartEnable = false,
+                };
 
-            Rect2D scissor = new()
-            {
-                Offset = { X = 0, Y = 0 },
-                Extent = swapChainExtent,
-            };
+                Viewport viewport = new()
+                {
+                    X = 0.0f,
+                    Y = 0.0f,
+                    Width = swapChainExtent.Width,
+                    Height = swapChainExtent.Height,
+                    MinDepth = 0.0f,
+                    MaxDepth = 1.0f,
+                };
 
-            PipelineViewportStateCreateInfo viewportCreateInfo = new()
-            {
-                SType = StructureType.PipelineViewportStateCreateInfo,
-                ViewportCount = 1,
-                PViewports = &viewport,
-                ScissorCount = 1,
-                PScissors = &scissor,
-            };
+                Rect2D scissor = new()
+                {
+                    Offset = { X = 0, Y = 0 },
+                    Extent = swapChainExtent,
+                };
 
-            PipelineRasterizationStateCreateInfo rasterizerCreateInfo = new()
-            {
-                SType = StructureType.PipelineRasterizationStateCreateInfo,
-                DepthClampEnable = false,
-                RasterizerDiscardEnable = false,
-                PolygonMode = PolygonMode.Fill,
-                LineWidth = 1.0f,
-                CullMode = CullModeFlags.BackBit,
-                FrontFace = FrontFace.Clockwise,
-                DepthBiasEnable = false,
-                DepthBiasConstantFactor = 0.0f,
-                DepthBiasClamp = 0.0f,
-                DepthBiasSlopeFactor = 0.0f,
-            };
+                PipelineViewportStateCreateInfo viewportCreateInfo = new()
+                {
+                    SType = StructureType.PipelineViewportStateCreateInfo,
+                    ViewportCount = 1,
+                    PViewports = &viewport,
+                    ScissorCount = 1,
+                    PScissors = &scissor,
+                };
 
-            PipelineMultisampleStateCreateInfo multisampleCreateInfo = new()
-            {
-                SType = StructureType.PipelineMultisampleStateCreateInfo,
-                SampleShadingEnable = false,
-                RasterizationSamples = SampleCountFlags.Count1Bit,
-            };
+                PipelineRasterizationStateCreateInfo rasterizerCreateInfo = new()
+                {
+                    SType = StructureType.PipelineRasterizationStateCreateInfo,
+                    DepthClampEnable = false,
+                    RasterizerDiscardEnable = false,
+                    PolygonMode = PolygonMode.Fill,
+                    LineWidth = 1.0f,
+                    CullMode = CullModeFlags.BackBit,
+                    FrontFace = FrontFace.Clockwise,
+                    DepthBiasEnable = false,
+                    DepthBiasConstantFactor = 0.0f,
+                    DepthBiasClamp = 0.0f,
+                    DepthBiasSlopeFactor = 0.0f,
+                };
 
-            PipelineColorBlendAttachmentState colorBlendAttachement = new()
-            {
-                ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit |
-                    ColorComponentFlags.BBit | ColorComponentFlags.ABit,
-                BlendEnable = false,
-            };
+                PipelineMultisampleStateCreateInfo multisampleCreateInfo = new()
+                {
+                    SType = StructureType.PipelineMultisampleStateCreateInfo,
+                    SampleShadingEnable = false,
+                    RasterizationSamples = SampleCountFlags.Count1Bit,
+                };
 
-            PipelineColorBlendStateCreateInfo colorBlendingCreateInfo = new()
-            {
-                SType = StructureType.PipelineColorBlendStateCreateInfo,
-                LogicOpEnable = false,
-                AttachmentCount = 1,
-                PAttachments = &colorBlendAttachement,
-            };
+                PipelineColorBlendAttachmentState colorBlendAttachement = new()
+                {
+                    ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit |
+                        ColorComponentFlags.BBit | ColorComponentFlags.ABit,
+                    BlendEnable = false,
+                };
 
-            PipelineLayoutCreateInfo pipelineLayoutCreateInfo = new()
-            {
-                SType = StructureType.PipelineLayoutCreateInfo,
-            };
+                PipelineColorBlendStateCreateInfo colorBlendingCreateInfo = new()
+                {
+                    SType = StructureType.PipelineColorBlendStateCreateInfo,
+                    LogicOpEnable = false,
+                    AttachmentCount = 1,
+                    PAttachments = &colorBlendAttachement,
+                };
 
-            if (vk!.CreatePipelineLayout(logicalDevice, pipelineLayoutCreateInfo, null, out pipelineLayout) != Result.Success)
-            {
-                throw new Exception("Failed to create pipeline layout");
-            }
+                colorBlendingCreateInfo.BlendConstants[0] = 0;
+                colorBlendingCreateInfo.BlendConstants[1] = 0;
+                colorBlendingCreateInfo.BlendConstants[2] = 0;
+                colorBlendingCreateInfo.BlendConstants[3] = 0;
 
-            GraphicsPipelineCreateInfo pipelineCreateInfo = new()
-            {
-                SType = StructureType.GraphicsPipelineCreateInfo,
-                StageCount = 2,
-                PStages = shaderStages,
-                PVertexInputState = &vertexInputStateCreateInfo,
-                PInputAssemblyState = &assemblyStateCreateInfo,
-                PViewportState = &viewportCreateInfo,
-                PRasterizationState = &rasterizerCreateInfo,
-                PMultisampleState = &multisampleCreateInfo,
-                PDepthStencilState = null,
-                PColorBlendState = &colorBlendingCreateInfo,
-                Layout = pipelineLayout,
-                RenderPass = renderPass,
-                Subpass = 0,
-            };
+                PipelineLayoutCreateInfo pipelineLayoutCreateInfo = new()
+                {
+                    SType = StructureType.PipelineLayoutCreateInfo,
+                    SetLayoutCount = 0,
+                    PushConstantRangeCount = 0,
+                };
 
-            if (vk!.CreateGraphicsPipelines(logicalDevice, default, 1, pipelineCreateInfo, null, out graphicsPipeline) != Result.Success)
-            {
-                throw new Exception("Failed to create graphics pipeline");
+                if (vk!.CreatePipelineLayout(logicalDevice, pipelineLayoutCreateInfo, null, out pipelineLayout) != Result.Success)
+                {
+                    throw new Exception("Failed to create pipeline layout");
+                }
+
+                GraphicsPipelineCreateInfo pipelineCreateInfo = new()
+                {
+                    SType = StructureType.GraphicsPipelineCreateInfo,
+                    StageCount = 2,
+                    PStages = shaderStages,
+                    PVertexInputState = &vertexInputStateCreateInfo,
+                    PInputAssemblyState = &assemblyStateCreateInfo,
+                    PViewportState = &viewportCreateInfo,
+                    PRasterizationState = &rasterizerCreateInfo,
+                    PMultisampleState = &multisampleCreateInfo,
+                    PDepthStencilState = null,
+                    PColorBlendState = &colorBlendingCreateInfo,
+                    Layout = pipelineLayout,
+                    RenderPass = renderPass,
+                    Subpass = 0,
+                    BasePipelineHandle = default,
+                };
+
+                if (vk!.CreateGraphicsPipelines(logicalDevice, default, 1, pipelineCreateInfo, null, out graphicsPipeline) != Result.Success)
+                {
+                    throw new Exception("Failed to create graphics pipeline");
+                }
             }
 
             vk!.DestroyShaderModule(logicalDevice, vertShaderModule, null);
@@ -986,7 +1063,7 @@ namespace ShapesDisplay
 
         private void CreateCommandBuffers()
         {
-            commandBuffers = new CommandBuffer[MAX_FRAMES_IN_FLIGHT];
+            commandBuffers = new CommandBuffer[swapchainFramebuffers!.Length];
 
             CommandBufferAllocateInfo commandBufferInfo = new()
             {
@@ -1003,49 +1080,167 @@ namespace ShapesDisplay
                     throw new Exception("Failed to allocate command buffers");
                 }
             }
-        }
 
-        private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
-        {
-            CommandBufferBeginInfo commandBufferBeginInfo = new()
+            for (int i = 0; i < commandBuffers.Length; i++)
             {
-                SType = StructureType.CommandBufferBeginInfo,
-            };
+                CommandBufferBeginInfo commandBufferBeginInfo = new()
+                {
+                    SType = StructureType.CommandBufferBeginInfo,
+                };
 
-            if (vk!.BeginCommandBuffer(commandBuf, commandBufferBeginInfo) != Result.Success)
-            {
-                throw new Exception("Failed to begin recording command buffer");
-            }
+                if (vk!.BeginCommandBuffer(commandBuffers[i], commandBufferBeginInfo) != Result.Success)
+                {
+                    throw new Exception("Failed to begin recording command buffer");
+                }
 
-            RenderPassBeginInfo renderPassBeginInfo = new()
-            {
-                SType = StructureType.RenderPassBeginInfo,
-                RenderPass = renderPass,
-                Framebuffer = swapchainFramebuffers[imageIndex],
-                RenderArea = {
+                RenderPassBeginInfo renderPassBeginInfo = new()
+                {
+                    SType = StructureType.RenderPassBeginInfo,
+                    RenderPass = renderPass,
+                    Framebuffer = swapchainFramebuffers![i],
+                    RenderArea = {
                         Offset = { X = 0, Y = 0 },
                         Extent = swapChainExtent,
                     }
-            };
+                };
 
-            ClearValue clearColor = new()
-            {
-                Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
-            };
+                ClearValue clearColor = new()
+                {
+                    Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+                };
 
-            renderPassBeginInfo.ClearValueCount = 1;
-            renderPassBeginInfo.PClearValues = &clearColor;
+                renderPassBeginInfo.ClearValueCount = 1;
+                renderPassBeginInfo.PClearValues = &clearColor;
 
-            vk!.CmdBeginRenderPass(commandBuf, renderPassBeginInfo, SubpassContents.Inline);
-            vk!.CmdBindPipeline(commandBuf, PipelineBindPoint.Graphics, graphicsPipeline);
-            vk!.CmdDraw(commandBuf, 3, 1, 0, 0);
-            vk!.CmdEndRenderPass(commandBuf);
+                vk!.CmdBeginRenderPass(commandBuffers[i], &renderPassBeginInfo, SubpassContents.Inline);
 
-            if (vk!.EndCommandBuffer(commandBuf) != Result.Success)
-            {
-                throw new Exception("Failed to record command buffer");
+                vk!.CmdBindPipeline(commandBuffers[i], PipelineBindPoint.Graphics, graphicsPipeline);
+
+                var vertexBuffers = new Buffer[]{ vertexBuffer };
+                var offsets = new ulong[] { 0 };
+
+                fixed (ulong* offsetsPtr = offsets)
+                fixed (Buffer* vertexBufferPtr = vertexBuffers)
+                {
+                    vk!.CmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBufferPtr, offsetsPtr);
+                }
+
+                vk!.CmdDraw(commandBuffers[i], (uint)vertices.Length, 1, 0, 0);
+
+                vk!.CmdEndRenderPass(commandBuffers[i]);
+
+                if (vk!.EndCommandBuffer(commandBuffers[i]) != Result.Success)
+                {
+                    throw new Exception("Failed to record command buffer");
+                }
             }
+
         }
+
+        //private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
+        //{
+        //    CommandBufferBeginInfo commandBufferBeginInfo = new()
+        //    {
+        //        SType = StructureType.CommandBufferBeginInfo,
+        //    };
+
+        //    if (vk!.BeginCommandBuffer(commandBuf, commandBufferBeginInfo) != Result.Success)
+        //    {
+        //        throw new Exception("Failed to begin recording command buffer");
+        //    }
+
+        //    RenderPassBeginInfo renderPassBeginInfo = new()
+        //    {
+        //        SType = StructureType.RenderPassBeginInfo,
+        //        RenderPass = renderPass,
+        //        Framebuffer = swapchainFramebuffers[imageIndex],
+        //        RenderArea = {
+        //                Offset = { X = 0, Y = 0 },
+        //                Extent = swapChainExtent,
+        //            }
+        //    };
+
+        //    ClearValue clearColor = new()
+        //    {
+        //        Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
+        //    };
+
+        //    renderPassBeginInfo.ClearValueCount = 1;
+        //    renderPassBeginInfo.PClearValues = &clearColor;
+
+        //    vk!.CmdBeginRenderPass(commandBuf, renderPassBeginInfo, SubpassContents.Inline);
+        //    vk!.CmdBindPipeline(commandBuf, PipelineBindPoint.Graphics, graphicsPipeline);
+        //    vk!.CmdDraw(commandBuf, 3, 1, 0, 0);
+        //    vk!.CmdEndRenderPass(commandBuf);
+
+        //    if (vk!.EndCommandBuffer(commandBuf) != Result.Success)
+        //    {
+        //        throw new Exception("Failed to record command buffer");
+        //    }
+        //}
+        #endregion
+
+        #region Vertex Buffer
+        private void CreateVertexBuffer()
+        {
+            BufferCreateInfo bufferCreateInfo = new()
+            {
+                SType = StructureType.BufferCreateInfo,
+                Size = (ulong)(sizeof(Vertex) * vertices.Length),
+                Usage = BufferUsageFlags.VertexBufferBit,
+                SharingMode = SharingMode.Exclusive,
+            };
+
+            fixed (Buffer* vertexBufferPtr = &vertexBuffer)
+            {
+                if (vk!.CreateBuffer(logicalDevice, bufferCreateInfo, null, vertexBufferPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to create vertex buffer");
+                }
+            }
+
+            MemoryRequirements memRequirements = new();
+            vk!.GetBufferMemoryRequirements(logicalDevice, vertexBuffer, out  memRequirements);
+
+            MemoryAllocateInfo allocCreateInfo = new()
+            {
+                SType = StructureType.MemoryAllocateInfo,
+                AllocationSize = memRequirements.Size,
+                MemoryTypeIndex = FindMemoryType(memRequirements.MemoryTypeBits, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit)
+            };
+
+            fixed (DeviceMemory* vertexBufferMemoryPtr = & vertexBufferMemory)
+            {
+                if (vk!.AllocateMemory(logicalDevice, allocCreateInfo, null, vertexBufferMemoryPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to allocate vertex buffer memory");
+                }
+            }
+
+            vk!.BindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
+
+            void* data;
+            vk!.MapMemory(logicalDevice, vertexBufferMemory, 0, bufferCreateInfo.Size, 0, &data);
+            vertices.AsSpan().CopyTo(new Span<Vertex>(data, vertices.Length));
+            vk!.UnmapMemory(logicalDevice, vertexBufferMemory);
+        }
+
+        private uint FindMemoryType(uint typeFilter, MemoryPropertyFlags properties)
+        {
+            PhysicalDeviceMemoryProperties memProperties = new();
+            vk!.GetPhysicalDeviceMemoryProperties(physicalDevice, out memProperties);
+
+            for (int i = 0; i < memProperties.MemoryTypeCount; i++)
+            {
+                if ((typeFilter & (1 << i)) != 0 && (memProperties.MemoryTypes[i].PropertyFlags & properties) == properties)
+                {
+                    return (uint)i;
+                }
+            }
+
+            throw new Exception("Failed to find suitable memory type");
+        }
+
         #endregion
 
         #region Draw
@@ -1065,10 +1260,15 @@ namespace ShapesDisplay
                 throw new Exception("Failed to acquire swap chain image.");
             }
 
-            vk!.ResetFences(logicalDevice, 1, inFlightFences![currentFrame]);
+            if (imagesInFlight![indexImage].Handle != default)
+            {
+                vk!.WaitForFences(logicalDevice, 1, imagesInFlight[indexImage], true, ulong.MaxValue);
+            }
+            imagesInFlight[indexImage] = inFlightFences[currentFrame];
+            
 
-            vk!.ResetCommandBuffer(commandBuffers![currentFrame], 0);
-            RecordCommandBuffer(commandBuffers![currentFrame], indexImage);
+            //vk!.ResetCommandBuffer(commandBuffers![currentFrame], 0);
+            //RecordCommandBuffer(commandBuffers![currentFrame], indexImage);
 
             SubmitInfo submitInfo = new()
             {
@@ -1078,7 +1278,7 @@ namespace ShapesDisplay
             var waitSemaphores = stackalloc[] { imageAvailableSemaphores[currentFrame] };
             var waitStages = stackalloc[]{ PipelineStageFlags.ColorAttachmentOutputBit };
 
-            var buffer = commandBuffers[currentFrame];
+            var buffer = commandBuffers![currentFrame];
 
             submitInfo = submitInfo with
             {
@@ -1093,6 +1293,8 @@ namespace ShapesDisplay
 
             submitInfo.PSignalSemaphores = signalSemaphores;
             submitInfo.SignalSemaphoreCount = 1;
+
+            vk!.ResetFences(logicalDevice, 1, inFlightFences![currentFrame]);
 
             if (vk!.QueueSubmit(graphicsQueue, 1, submitInfo, inFlightFences![currentFrame]) != Result.Success)
             {
@@ -1130,6 +1332,7 @@ namespace ShapesDisplay
             imageAvailableSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
             renderFinishedSemaphores = new Semaphore[MAX_FRAMES_IN_FLIGHT];
             inFlightFences = new Fence[MAX_FRAMES_IN_FLIGHT];
+            imagesInFlight = new Fence[swapChainImages!.Length];
 
             SemaphoreCreateInfo semaphoreCreateInfo = new()
             {
