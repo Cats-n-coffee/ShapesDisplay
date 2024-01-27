@@ -118,13 +118,21 @@ namespace ShapesDisplay
 
         private Vertex[] vertices = new Vertex[]
         {
-            new Vertex { pos = new Vector2D<float>(0.0f,-0.5f), color = new Vector3D<float>(1.0f, 1.0f, 1.0f) },
-            new Vertex { pos = new Vector2D<float>(0.5f,0.5f), color = new Vector3D<float>(0.0f, 1.0f, 0.0f) },
-            new Vertex { pos = new Vector2D<float>(-0.5f,0.5f), color = new Vector3D<float>(0.0f, 0.0f, 1.0f) },
+            new Vertex { pos = new Vector2D<float>(-0.5f, -0.5f), color = new Vector3D<float>(1.0f, 0.0f, 0.0f) },
+            new Vertex { pos = new Vector2D<float>(0.5f, -0.5f), color = new Vector3D<float>(0.0f, 1.0f, 0.0f) },
+            new Vertex { pos = new Vector2D<float>(0.5f, 0.5f), color = new Vector3D<float>(0.0f, 0.0f, 1.0f) },
+            new Vertex { pos = new Vector2D<float>(-0.5f, 0.5f), color = new Vector3D<float>(1.0f, 1.0f, 1.0f) },
+        };
+
+        private ushort[] indices = new ushort[]
+        {
+            0, 1, 2, 2, 3, 0
         };
 
         Buffer vertexBuffer;
         DeviceMemory vertexBufferMemory;
+        Buffer indexBuffer;
+        DeviceMemory indexBufferMemory;
 
         private ExtDebugUtils? debugUtils;
         private DebugUtilsMessengerEXT debugMessenger;
@@ -181,6 +189,7 @@ namespace ShapesDisplay
             CreateFramebuffers();
             CreateCommandPool();
             CreateVertexBuffer();
+            CreateIndexBuffer();
             CreateCommandBuffers();
             CreateSyncObjects();
         }
@@ -195,6 +204,9 @@ namespace ShapesDisplay
         private void CleanUp()
         {
             CleanUpSwapChain();
+
+            vk!.DestroyBuffer(logicalDevice, indexBuffer, null);
+            vk!.FreeMemory(logicalDevice, indexBufferMemory, null);
 
             vk!.DestroyBuffer(logicalDevice, vertexBuffer, null);
             vk!.FreeMemory(logicalDevice, vertexBufferMemory, null);
@@ -1125,7 +1137,9 @@ namespace ShapesDisplay
                     vk!.CmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBufferPtr, offsetsPtr);
                 }
 
-                vk!.CmdDraw(commandBuffers[i], (uint)vertices.Length, 1, 0, 0);
+                vk!.CmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, IndexType.Uint16);
+
+                vk!.CmdDrawIndexed(commandBuffers[i], (uint)indices.Length, 1, 0, 0, 0);
 
                 vk!.CmdEndRenderPass(commandBuffers[i]);
 
@@ -1303,6 +1317,33 @@ namespace ShapesDisplay
             vk!.QueueWaitIdle(graphicsQueue);
 
             vk!.FreeCommandBuffers(logicalDevice, commandPool, 1, commandBuffer);
+        }
+
+        #endregion
+
+        #region Index Buffer
+        private void CreateIndexBuffer()
+        {
+            ulong bufferSize = (ulong)(Unsafe.SizeOf<ushort>() * indices.Length);
+
+            Buffer stagingBuffer = default;
+            DeviceMemory stagingBufferMemory = default;
+
+            CreateBuffer(bufferSize, BufferUsageFlags.TransferSrcBit, MemoryPropertyFlags.HostVisibleBit
+                | MemoryPropertyFlags.HostCoherentBit, ref stagingBuffer, ref stagingBufferMemory);
+
+            void* data;
+            vk!.MapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+            indices.AsSpan().CopyTo(new Span<ushort>(data, indices.Length));
+            vk!.UnmapMemory(logicalDevice, stagingBufferMemory);
+
+            CreateBuffer(bufferSize, BufferUsageFlags.TransferDstBit | BufferUsageFlags.IndexBufferBit,
+                MemoryPropertyFlags.DeviceLocalBit, ref indexBuffer, ref indexBufferMemory);
+
+            CopyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+            vk!.DestroyBuffer(logicalDevice, stagingBuffer, null);
+            vk!.FreeMemory(logicalDevice, stagingBufferMemory, null);
         }
 
         #endregion
