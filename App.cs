@@ -71,6 +71,13 @@ struct Vertex
     }
 }
 
+struct UniformBufferObject
+{
+    public Matrix4X4<float> model;
+    public Matrix4X4<float> view;
+    public Matrix4X4<float> proj;
+}
+
 namespace ShapesDisplay
 {
     unsafe class App
@@ -102,6 +109,7 @@ namespace ShapesDisplay
         private ImageView[]? swapchainImageViews;
 
         private RenderPass renderPass;
+        private DescriptorSetLayout descriptorSetLayout;
         private PipelineLayout pipelineLayout;
 
         private Pipeline graphicsPipeline;
@@ -185,6 +193,7 @@ namespace ShapesDisplay
             CreateSwapChain();
             CreateImageViews();
             CreateRenderPass();
+            CreateDescriptorSetLayout();
             CreateGraphicsPipeline();
             CreateFramebuffers();
             CreateCommandPool();
@@ -204,6 +213,8 @@ namespace ShapesDisplay
         private void CleanUp()
         {
             CleanUpSwapChain();
+
+            vk!.DestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, null);
 
             vk!.DestroyBuffer(logicalDevice, indexBuffer, null);
             vk!.FreeMemory(logicalDevice, indexBufferMemory, null);
@@ -841,6 +852,36 @@ namespace ShapesDisplay
 
         #endregion
 
+        #region Descriptor Set
+        private void CreateDescriptorSetLayout()
+        {
+            DescriptorSetLayoutBinding uboLayoutBinding = new()
+            {
+                Binding = 0,
+                DescriptorType = DescriptorType.UniformBuffer,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.VertexBit,
+                PImmutableSamplers = null,
+            };
+
+            DescriptorSetLayoutCreateInfo layoutCreateInfo = new()
+            {
+                SType= StructureType.DescriptorSetLayoutCreateInfo,
+                BindingCount = 1,
+                PBindings = &uboLayoutBinding,
+            };
+
+            fixed (DescriptorSetLayout* descriptorSetLayoutPtr = &descriptorSetLayout)
+            {
+                if (vk!.CreateDescriptorSetLayout(logicalDevice, layoutCreateInfo, null, descriptorSetLayoutPtr) != Result.Success)
+                {
+                    throw new Exception("Failed to create descriptor set layout");
+                }
+            }
+        }
+
+        #endregion
+
         #region Graphics Pipeline
         private void CreateGraphicsPipeline()
         {
@@ -874,6 +915,7 @@ namespace ShapesDisplay
             var attributeDescriptions = Vertex.GetAttributeDescriptions();
 
             fixed (VertexInputAttributeDescription* attributeDescriptionsPtr = attributeDescriptions)
+            fixed (DescriptorSetLayout* descriptorSetLayoutPtr = &descriptorSetLayout)
             {
                 PipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = new()
                 {
@@ -961,7 +1003,8 @@ namespace ShapesDisplay
                 PipelineLayoutCreateInfo pipelineLayoutCreateInfo = new()
                 {
                     SType = StructureType.PipelineLayoutCreateInfo,
-                    SetLayoutCount = 0,
+                    SetLayoutCount = 1,
+                    PSetLayouts = descriptorSetLayoutPtr,
                     PushConstantRangeCount = 0,
                 };
 
@@ -1151,47 +1194,6 @@ namespace ShapesDisplay
 
         }
 
-        //private void RecordCommandBuffer(CommandBuffer commandBuf, uint imageIndex)
-        //{
-        //    CommandBufferBeginInfo commandBufferBeginInfo = new()
-        //    {
-        //        SType = StructureType.CommandBufferBeginInfo,
-        //    };
-
-        //    if (vk!.BeginCommandBuffer(commandBuf, commandBufferBeginInfo) != Result.Success)
-        //    {
-        //        throw new Exception("Failed to begin recording command buffer");
-        //    }
-
-        //    RenderPassBeginInfo renderPassBeginInfo = new()
-        //    {
-        //        SType = StructureType.RenderPassBeginInfo,
-        //        RenderPass = renderPass,
-        //        Framebuffer = swapchainFramebuffers[imageIndex],
-        //        RenderArea = {
-        //                Offset = { X = 0, Y = 0 },
-        //                Extent = swapChainExtent,
-        //            }
-        //    };
-
-        //    ClearValue clearColor = new()
-        //    {
-        //        Color = new() { Float32_0 = 0, Float32_1 = 0, Float32_2 = 0, Float32_3 = 1 },
-        //    };
-
-        //    renderPassBeginInfo.ClearValueCount = 1;
-        //    renderPassBeginInfo.PClearValues = &clearColor;
-
-        //    vk!.CmdBeginRenderPass(commandBuf, renderPassBeginInfo, SubpassContents.Inline);
-        //    vk!.CmdBindPipeline(commandBuf, PipelineBindPoint.Graphics, graphicsPipeline);
-        //    vk!.CmdDraw(commandBuf, 3, 1, 0, 0);
-        //    vk!.CmdEndRenderPass(commandBuf);
-
-        //    if (vk!.EndCommandBuffer(commandBuf) != Result.Success)
-        //    {
-        //        throw new Exception("Failed to record command buffer");
-        //    }
-        //}
         #endregion
 
         #region Vertex Buffer
