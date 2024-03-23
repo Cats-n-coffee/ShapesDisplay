@@ -167,7 +167,7 @@ namespace ShapesDisplay
             WindowOptions options = WindowOptions.DefaultVulkan with
             {
                 Size = new Vector2D<int>(WIDTH, HEIGHT),
-                Title = "Shapes Display in C#",
+                Title = "Shapes Display in C# test",
             };
 
             _window = Silk.NET.Windowing.Window.Create(options);
